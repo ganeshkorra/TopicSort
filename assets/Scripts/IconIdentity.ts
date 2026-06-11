@@ -1,8 +1,8 @@
-import { _decorator, Component } from 'cc'; // Removed 'String' from here
+import { _decorator, Component } from 'cc';
 const { ccclass, property } = _decorator;
 
 @ccclass('IconIdentity')
 export class IconIdentity extends Component {
     @property
-    public familyID: string = ""; // No changes needed here, 'string' is built-in
+    public familyID: string = ""; // Example: "food", "sports", "faces"
 }
