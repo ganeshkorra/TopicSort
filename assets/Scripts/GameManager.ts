@@ -1,5 +1,6 @@
 import { _decorator, Component, Node, Vec2, Vec3, EventTouch, UITransform, tween, Layout, ParticleSystem2D, ParticleSystem, Label, ProgressBar } from 'cc';
 import { IconIdentity } from './IconIdentity';
+import { Analytics, analyticsEvents } from './Analytics';
 const { ccclass, property } = _decorator;
 
 interface MatchData {
@@ -12,6 +13,8 @@ export class GameManager extends Component {
 
     @property(Node) public dragLayer: Node = null;
     @property(Node) public dropGlow: Node = null;
+    @property(Node) public winCTA: Node = null;  // Win CTA screen
+    @property(Node) public loseCTA: Node = null;  // Lose CTA screen
    
     @property(Label) public movesCountLabel: Label = null;
     @property(Label) public matchesCountLabel: Label = null;
@@ -27,6 +30,7 @@ export class GameManager extends Component {
     @property({ tooltip: "Y offset inside label" }) public labelYOffset: number = -25; 
     @property({ tooltip: "How long match particle stays visible" }) public matchParticleDuration: number = 0.8;
     @property({ tooltip: "Moves shown at game start" }) public totalMoves: number = 40;
+    @property({ tooltip: "Game time limit in seconds" }) public gameTimeLimit: number = 45;
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
@@ -36,6 +40,9 @@ export class GameManager extends Component {
     private _completedCount: number = 0;
     private _moveCount: number = 0;
     private _displayedProgress: number = 0;
+    private _gameTime: number = 0;  // Current game time in seconds
+    private _isGameEnded: boolean = false;  // Prevent multiple end calls
+    private _timerStarted: boolean = false;  // Timer starts on first swap
 
     private _gridYSlots: number[] = [];
     private _activeRows: Node[] = [];
@@ -47,6 +54,10 @@ export class GameManager extends Component {
     start() {
         this.labelNodes.forEach(label => label.active = false);
         this.hideDropGlow();
+        
+        // Hide CTA screens at start
+        if (this.winCTA) this.winCTA.active = false;
+        if (this.loseCTA) this.loseCTA.active = false;
       
         this.updateProgressUI();
 
@@ -98,7 +109,6 @@ export class GameManager extends Component {
         const targetIcon = this.findDropTarget(touchPos);
 
         this.hideDropGlow();
-        this.addMove();
         if (targetIcon) { this.handleSwap(this._draggedIcon, targetIcon); }
         else { this.returnHome(); }
         this._draggedIcon = null;
@@ -135,6 +145,15 @@ export class GameManager extends Component {
 
     private handleSwap(dragged: Node, target: Node) {
         this._isSwapping = true;
+        
+        // Start timer on first swap
+        if (!this._timerStarted) {
+            this._timerStarted = true;
+        }
+        
+        // Count this move
+        this.addMove();
+        
         const targetStartWP = new Vec3(target.worldPosition);
         const draggedReleaseWP = new Vec3(dragged.worldPosition);
         const targetOldParent = target.parent;
@@ -195,6 +214,11 @@ export class GameManager extends Component {
     private processMatchQueue() {
         if (this._matchQueue.length === 0) {
             this._isRowFlying = false;
+            
+            // Check win condition after all matches are processed
+            this.scheduleOnce(() => {
+                this.checkWinCondition();
+            }, 0.5);
             return;
         }
 
@@ -245,6 +269,24 @@ export class GameManager extends Component {
     private addMove() {
         this._moveCount++;
         this.updateProgressUI();
+        
+        // Check if player lost (moves exhausted)
+        if (this._moveCount >= this.totalMoves && !this._isGameEnded) {
+            this.scheduleOnce(() => {
+                this.endGameLose();
+            }, 0.5);
+        }
+    }
+
+    update(deltaTime: number) {
+        if (!this._timerStarted || this._isGameEnded) return;
+
+        this._gameTime += deltaTime;
+
+        // Check if time is up
+        if (this._gameTime >= this.gameTimeLimit) {
+            this.endGameLose();
+        }
     }
 
     private updateProgressUI() {
@@ -305,5 +347,61 @@ export class GameManager extends Component {
                 tween(rowToMove).to(0.5, { position: new Vec3(rowToMove.position.x, targetY, 0) }, { easing: 'expoOut' }).start();
             }
         }
+    }
+
+    private checkWinCondition() {
+        const totalMatches = this.rowNodes.length;
+        if (this._completedCount >= totalMatches && !this._isGameEnded) {
+            this.endGameWin();
+        }
+    }
+
+    private endGameWin() {
+        if (this._isGameEnded) return;
+        this._isGameEnded = true;
+
+        // Disable all touch on icons
+        this.allIcons.forEach(icon => {
+            icon.off(Node.EventType.TOUCH_START);
+            icon.off(Node.EventType.TOUCH_MOVE);
+            icon.off(Node.EventType.TOUCH_END);
+        });
+
+        // Show win CTA screen
+        if (this.winCTA) {
+            this.winCTA.active = true;
+        }
+
+        // Fire analytics
+        if (Analytics.instance) {
+            Analytics.instance.dispatchEvent(analyticsEvents.CHALLENGE_SOLVED);
+        }
+
+        console.log("🎉 GAME WON! All rows matched!");
+    }
+
+    private endGameLose() {
+        if (this._isGameEnded) return;
+        this._isGameEnded = true;
+
+        // Disable all touch on icons
+        this.allIcons.forEach(icon => {
+            icon.off(Node.EventType.TOUCH_START);
+            icon.off(Node.EventType.TOUCH_MOVE);
+            icon.off(Node.EventType.TOUCH_END);
+        });
+
+        // Show lose CTA screen
+        if (this.loseCTA) {
+            this.loseCTA.active = true;
+        }
+
+        // Fire analytics
+        if (Analytics.instance) {
+            Analytics.instance.dispatchEvent(analyticsEvents.CHALLENGE_FAILED);
+        }
+
+        const loseReason = this._gameTime >= this.gameTimeLimit ? "Time's up!" : "Out of moves!";
+        console.log(`❌ GAME LOST! ${loseReason}`);
     }
 }
