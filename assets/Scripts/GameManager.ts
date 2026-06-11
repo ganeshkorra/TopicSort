@@ -1,6 +1,7 @@
 import { _decorator, Component, Node, Vec2, Vec3, EventTouch, UITransform, tween, Layout, ParticleSystem2D, ParticleSystem, Label, ProgressBar } from 'cc';
 import { IconIdentity } from './IconIdentity';
 import { Analytics, analyticsEvents } from './Analytics';
+import { HandTutorialNode } from './HandTutorialNode';
 const { ccclass, property } = _decorator;
 
 interface MatchData {
@@ -15,6 +16,9 @@ export class GameManager extends Component {
     @property(Node) public dropGlow: Node = null;
     @property(Node) public winCTA: Node = null;  // Win CTA screen
     @property(Node) public loseCTA: Node = null;  // Lose CTA screen
+    @property(Node) public handTutorialNode: Node = null;  // Hand tutorial node
+    @property(Node) public targetIconNode1: Node = null;  // First icon for hand tutorial
+    @property(Node) public targetIconNode2: Node = null;  // Second icon for hand tutorial
    
     @property(Label) public movesCountLabel: Label = null;
     @property(Label) public matchesCountLabel: Label = null;
@@ -31,6 +35,7 @@ export class GameManager extends Component {
     @property({ tooltip: "How long match particle stays visible" }) public matchParticleDuration: number = 0.8;
     @property({ tooltip: "Moves shown at game start" }) public totalMoves: number = 40;
     @property({ tooltip: "Game time limit in seconds" }) public gameTimeLimit: number = 45;
+    @property({ tooltip: "Time before idle hand hint appears (seconds)" }) public idleHintDelay: number = 7;
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
@@ -43,6 +48,9 @@ export class GameManager extends Component {
     private _gameTime: number = 0;  // Current game time in seconds
     private _isGameEnded: boolean = false;  // Prevent multiple end calls
     private _timerStarted: boolean = false;  // Timer starts on first swap
+    private _tutorialActive: boolean = true;  // Hand tutorial is active
+    private _timeSinceLastMove: number = 0;  // Time elapsed since last successful move
+    private _idleHintTriggered: boolean = false;  // Idle hint has been shown
 
     private _gridYSlots: number[] = [];
     private _activeRows: Node[] = [];
@@ -75,9 +83,21 @@ export class GameManager extends Component {
             icon.on(Node.EventType.TOUCH_END, this.onTouchEnd, this);
             icon.on(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
         });
+
+        // Start hand tutorial if available
+        this.playHandTutorial();
     }
 
     private onTouchStart(event: EventTouch) {
+        // Stop tutorial on first player input
+        if (this._tutorialActive) {
+            this._tutorialActive = false;
+            const handTutorial = this.handTutorialNode?.getComponent(HandTutorialNode);
+            if (handTutorial) {
+                handTutorial.stopTutorial();
+            }
+        }
+
         if (this._isSwapping || this._isRowFlying) return;
         this._draggedIcon = event.target as Node;
         this.hideDropGlow();
@@ -270,6 +290,10 @@ export class GameManager extends Component {
         this._moveCount++;
         this.updateProgressUI();
         
+        // Reset idle hint timer on successful move
+        this._timeSinceLastMove = 0;
+        this._idleHintTriggered = false;
+        
         // Check if player lost (moves exhausted)
         if (this._moveCount >= this.totalMoves && !this._isGameEnded) {
             this.scheduleOnce(() => {
@@ -286,6 +310,13 @@ export class GameManager extends Component {
         // Check if time is up
         if (this._gameTime >= this.gameTimeLimit) {
             this.endGameLose();
+        }
+
+        // Track time since last move for idle hint
+        this._timeSinceLastMove += deltaTime;
+        if (this._timeSinceLastMove >= this.idleHintDelay && !this._idleHintTriggered) {
+            this._idleHintTriggered = true;
+            this.playIdleHandHint();
         }
     }
 
@@ -403,5 +434,73 @@ export class GameManager extends Component {
 
         const loseReason = this._gameTime >= this.gameTimeLimit ? "Time's up!" : "Out of moves!";
         console.log(`❌ GAME LOST! ${loseReason}`);
+    }
+
+    private playHandTutorial(): void {
+        if (!this.handTutorialNode || !this.targetIconNode1 || !this.targetIconNode2) return;
+
+        const handTutorial = this.handTutorialNode.getComponent(HandTutorialNode);
+        if (!handTutorial) return;
+
+        // Show drag tutorial between the two target icons
+        handTutorial.playDragTutorial(this.targetIconNode1, this.targetIconNode2);
+    }
+
+    private playIdleHandHint(): void {
+        if (!this.handTutorialNode || this.allIcons.length < 2) return;
+
+        const handTutorial = this.handTutorialNode.getComponent(HandTutorialNode);
+        if (!handTutorial) return;
+
+        // Smart hint: Find the row closest to matching and show icons from same family in same row
+        let bestIcon1: Node | null = null;
+        let bestIcon2: Node | null = null;
+        let bestScore: number = -1;
+        let bestRow: Node | null = null;
+
+        // Analyze each active row to find which one is closest to matching
+        this._activeRows.forEach(rowNode => {
+            const identities = rowNode.getComponentsInChildren(IconIdentity).filter(i => i.node.parent !== this.dragLayer);
+            
+            // Count families in this row
+            const familyCount: { [key: string]: number } = {};
+            const familyIcons: { [key: string]: Node[] } = {};
+
+            identities.forEach(idScript => {
+                const family = idScript.familyID;
+                familyCount[family] = (familyCount[family] || 0) + 1;
+                if (!familyIcons[family]) familyIcons[family] = [];
+                familyIcons[family].push(idScript.node);
+            });
+
+            // Find family with most icons in this row (closest to match)
+            Object.keys(familyCount).forEach(family => {
+                const count = familyCount[family];
+                
+                // Score: prefer rows with 3 of same family (one swap away from match)
+                // Then rows with 2 of same family (two swaps away)
+                let score = count === 3 ? 100 : count === 2 ? 50 : 0;
+                
+                // Only pick if score is better AND we have at least 2 icons of the same family in the SAME row
+                if (score > bestScore && familyIcons[family].length >= 2) {
+                    bestScore = score;
+                    bestRow = rowNode;
+                    bestIcon1 = familyIcons[family][0];
+                    bestIcon2 = familyIcons[family][1];
+                }
+            });
+        });
+
+        // Fallback: if no smart match found, use first two remaining icons
+        if (!bestIcon1 || !bestIcon2) {
+            bestIcon1 = this.allIcons[0];
+            bestIcon2 = this.allIcons[1];
+        }
+
+        if (bestIcon1 && bestIcon2) {
+            const hintType = bestScore === 100 ? "3 icons matching" : bestScore === 50 ? "2 icons matching" : "remaining";
+            console.log(`💡 Idle Hint: Showing same family icons from same row (${hintType})`);
+            handTutorial.playDragTutorial(bestIcon1, bestIcon2);
+        }
     }
 }
