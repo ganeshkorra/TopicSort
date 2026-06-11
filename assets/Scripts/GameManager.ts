@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Vec3, EventTouch, UITransform, tween } from 'cc';
+import { _decorator, Component, Node, Vec3, EventTouch, UITransform, tween, Layout } from 'cc';
 import { IconIdentity } from './IconIdentity';
 const { ccclass, property } = _decorator;
 
@@ -12,13 +12,22 @@ export class GameManager extends Component {
     @property([Node]) public labelNodes: Node[] = []; 
 
     @property({ tooltip: "Time for swap" }) public swapDuration: number = 0.6;
-    @property({ tooltip: "Scale size of row when fitted in label" }) public fittedScale: number = 2;
+    
+    @property({ tooltip: "Size of the row when it reaches the label" }) 
+    public fittedScale: number = 0.6; 
+
+    @property({ tooltip: "Adjust this to move icons down inside the label" })
+    public labelYOffset: number = -20; 
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
     private _startWorldPos: Vec3 = new Vec3();
     private _startSiblingIndex: number = 0;
     private _isSwapping: boolean = false;
+    private _completedCount: number = 0;
+
+    // A list to track which rows are currently animating or finished
+    private _processingRows: Set<string> = new Set();
 
     start() {
         this.labelNodes.forEach(label => label.active = false);
@@ -66,7 +75,6 @@ export class GameManager extends Component {
         this._draggedIcon = null;
     }
 
-    // THIS IS THE ORIGINAL SLOW SWAP YOU APPROVED
     private handleSwap(dragged: Node, target: Node) {
         this._isSwapping = true;
         const targetStartWP = new Vec3(target.worldPosition);
@@ -82,16 +90,13 @@ export class GameManager extends Component {
         target.setWorldPosition(targetStartWP);
         dragged.setWorldPosition(draggedReleaseWP);
 
-        // Slow smooth animation
-        tween(target)
-            .to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' })
-            .start();
+        tween(target).to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' }).start();
 
         tween(dragged)
             .to(this.swapDuration + 0.1, { worldPosition: targetStartWP }, { easing: 'backOut' })
             .call(() => {
                 this._isSwapping = false;
-                this.checkMatching(); // Check completion
+                this.checkMatching(); 
             })
             .start();
     }
@@ -103,17 +108,16 @@ export class GameManager extends Component {
         this._draggedIcon.setSiblingIndex(this._startSiblingIndex);
         this._draggedIcon.setWorldPosition(curWP);
 
-        tween(this._draggedIcon)
-            .to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' })
-            .call(() => { this._isSwapping = false; })
-            .start();
+        tween(this._draggedIcon).to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' }).call(() => { this._isSwapping = false; }).start();
     }
 
-    // --- MATCHING AND RESIZING LOGIC ---
+    // --- FIX: SEQUENTIAL DELAY MATCHING ---
 
     private checkMatching() {
         this.rowNodes.forEach(rowNode => {
-            // Find icons using identity script within the row
+            // Check if we are already processing this specific row (stops overlaps)
+            if (this._processingRows.has(rowNode.uuid)) return;
+
             const identities = rowNode.getComponentsInChildren(IconIdentity).filter(i => i.node.parent !== this.dragLayer);
             
             if (identities.length === 4) {
@@ -121,44 +125,49 @@ export class GameManager extends Component {
                 const isMatch = identities.every(id => id.familyID === family);
 
                 if (isMatch && family !== "") {
-                    this.flyAndScaleRow(rowNode, family);
+                    // Mark as processing immediately
+                    this._processingRows.add(rowNode.uuid);
+                    this.flyToSequence(rowNode, family);
                 }
             }
         });
     }
 
-    private flyAndScaleRow(row: Node, familyID: string) {
-        // Find label by identity
+    private flyToSequence(row: Node, familyID: string) {
         const targetLabel = this.labelNodes.find(lbl => lbl.getComponent(IconIdentity)?.familyID === familyID);
 
-        if (targetLabel && row.active) {
+        if (targetLabel) {
+            // 1. Arrange Label in Stack
             targetLabel.active = true;
+            targetLabel.setSiblingIndex(this._completedCount); 
+            this._completedCount++; 
 
-            // Remove icons from interactions
-            const childIdentities = row.getComponentsInChildren(IconIdentity);
-            childIdentities.forEach(idScript => {
+            // 2. Clear interactions
+            row.getComponentsInChildren(IconIdentity).forEach(idScript => {
                 idScript.node.off(Node.EventType.TOUCH_START);
                 const idx = this.allIcons.indexOf(idScript.node);
                 if(idx > -1) this.allIcons.splice(idx, 1);
             });
 
-            // FLY AND RESIZE ANIMATION
-            const destWP = targetLabel.worldPosition;
-            // Target specific offset to fit inside label background
-            const finalPos = new Vec3(destWP.x, destWP.y - 25 , 0); 
+            // 3. FORCE LAYOUT REFRESH 
+            const layoutComp = targetLabel.parent.getComponent(Layout);
+            if (layoutComp) {
+                layoutComp.updateLayout();
+            }
 
-            tween(row)
-                .delay(0.2)
-                .to(0.8, { 
-                    worldPosition: finalPos, 
-                    scale: new Vec3(this.fittedScale, this.fittedScale, 1) 
-                }, { easing: 'quintInOut' })
-                .call(() => {
-                    // Small pop to finish
-                    tween(row).to(0.1, { scale: new Vec3(this.fittedScale + 0.05, this.fittedScale + 0.05, 1) })
-                             .to(0.1, { scale: new Vec3(this.fittedScale, this.fittedScale, 1) }).start();
-                })
-                .start();
+            // 4. WAIT A FRAME (This is the critical fix)
+            // This lets Cocos move the labels in the layout before calculating WorldPos
+            this.scheduleOnce(() => {
+                const destinationWP = new Vec3(targetLabel.worldPosition);
+                destinationWP.y += this.labelYOffset;
+
+                tween(row)
+                    .to(0.8, { 
+                        worldPosition: destinationWP, 
+                        scale: new Vec3(this.fittedScale, this.fittedScale, 1)
+                    }, { easing: 'quintInOut' })
+                    .start();
+            }, 0); // 0 delay = wait until next logic update
         }
     }
 }

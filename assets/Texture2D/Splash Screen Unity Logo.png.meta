@@ -1,0 +1,134 @@
+{
+  "ver": "1.0.27",
+  "importer": "image",
+  "imported": true,
+  "uuid": "1f2009c3-a873-4e3f-a0df-5723eb429116",
+  "files": [
+    ".json",
+    ".png"
+  ],
+  "subMetas": {
+    "6c48a": {
+      "importer": "texture",
+      "uuid": "1f2009c3-a873-4e3f-a0df-5723eb429116@6c48a",
+      "displayName": "Splash Screen Unity Logo",
+      "id": "6c48a",
+      "name": "texture",
+      "userData": {
+        "wrapModeS": "clamp-to-edge",
+        "wrapModeT": "clamp-to-edge",
+        "imageUuidOrDatabaseUri": "1f2009c3-a873-4e3f-a0df-5723eb429116",
+        "isUuid": true,
+        "visible": false,
+        "minfilter": "linear",
+        "magfilter": "linear",
+        "mipfilter": "none",
+        "anisotropy": 0
+      },
+      "ver": "1.0.22",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "f9941": {
+      "importer": "sprite-frame",
+      "uuid": "1f2009c3-a873-4e3f-a0df-5723eb429116@f9941",
+      "displayName": "Splash Screen Unity Logo",
+      "id": "f9941",
+      "name": "spriteFrame",
+      "userData": {
+        "trimThreshold": 1,
+        "rotated": false,
+        "offsetX": 0,
+        "offsetY": 0,
+        "trimX": 0,
+        "trimY": 240,
+        "width": 2048,
+        "height": 544,
+        "rawWidth": 2048,
+        "rawHeight": 1024,
+        "borderTop": 0,
+        "borderBottom": 0,
+        "borderLeft": 0,
+        "borderRight": 0,
+        "packable": true,
+        "pixelsToUnit": 100,
+        "pivotX": 0.5,
+        "pivotY": 0.5,
+        "meshType": 0,
+        "vertices": {
+          "rawPosition": [
+            -1024,
+            -272,
+            0,
+            1024,
+            -272,
+            0,
+            -1024,
+            272,
+            0,
+            1024,
+            272,
+            0
+          ],
+          "indexes": [
+            0,
+            1,
+            2,
+            2,
+            1,
+            3
+          ],
+          "uv": [
+            0,
+            784,
+            2048,
+            784,
+            0,
+            240,
+            2048,
+            240
+          ],
+          "nuv": [
+            0,
+            0.234375,
+            1,
+            0.234375,
+            0,
+            0.765625,
+            1,
+            0.765625
+          ],
+          "minPos": [
+            -1024,
+            -272,
+            0
+          ],
+          "maxPos": [
+            1024,
+            272,
+            0
+          ]
+        },
+        "isUuid": true,
+        "imageUuidOrDatabaseUri": "1f2009c3-a873-4e3f-a0df-5723eb429116@6c48a",
+        "atlasUuid": "",
+        "trimType": "auto"
+      },
+      "ver": "1.0.12",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "type": "sprite-frame",
+    "fixAlphaTransparencyArtifacts": false,
+    "hasAlpha": true,
+    "redirect": "1f2009c3-a873-4e3f-a0df-5723eb429116@6c48a"
+  }
+}
