@@ -4,6 +4,8 @@
 
   /* Add your custom configuration here. */
   "compilerOptions": {
+     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "strict": false
   }
 }
