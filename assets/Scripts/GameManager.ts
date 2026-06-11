@@ -1,15 +1,18 @@
-import { _decorator, Component, Node, Vec3, EventTouch, UITransform, tween, isValid } from 'cc';
+import { _decorator, Component, Node, Vec3, EventTouch, UITransform, tween } from 'cc';
 import { IconIdentity } from './IconIdentity';
 const { ccclass, property } = _decorator;
 
 @ccclass('GameManager')
 export class GameManager extends Component {
 
-    @property(Node)
-    public dragLayer: Node = null; // The 'Draggedlayer' node (at bottom of hierarchy)
+    @property(Node) public dragLayer: Node = null;
+    @property([Node]) public allIcons: Node[] = [];
+    
+    @property([Node]) public rowNodes: Node[] = [];   
+    @property([Node]) public labelNodes: Node[] = []; 
 
-    @property([Node])
-    public allIcons: Node[] = []; // Drag all 16 icons from hierarchy into this list
+    @property({ tooltip: "Time for swap" }) public swapDuration: number = 0.6;
+    @property({ tooltip: "Scale size of row when fitted in label" }) public fittedScale: number = 2;
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
@@ -18,9 +21,9 @@ export class GameManager extends Component {
     private _isSwapping: boolean = false;
 
     start() {
-        // Setup all icons with touch listeners
+        this.labelNodes.forEach(label => label.active = false);
+
         this.allIcons.forEach(icon => {
-            if (!icon) return;
             icon.on(Node.EventType.TOUCH_START, this.onTouchStart, this);
             icon.on(Node.EventType.TOUCH_MOVE, this.onTouchMove, this);
             icon.on(Node.EventType.TOUCH_END, this.onTouchEnd, this);
@@ -30,132 +33,132 @@ export class GameManager extends Component {
 
     private onTouchStart(event: EventTouch) {
         if (this._isSwapping) return;
-
         this._draggedIcon = event.target as Node;
-        
-        // Save Home data
         this._originalParent = this._draggedIcon.parent;
         this._startWorldPos.set(this._draggedIcon.worldPosition);
         this._startSiblingIndex = this._draggedIcon.getSiblingIndex();
 
-        // 1. Capture current position, then move to Top Layer
-        const currentWP = this._draggedIcon.worldPosition;
+        const wp = this._draggedIcon.worldPosition;
         this._draggedIcon.setParent(this.dragLayer);
-        
-        // 2. Prevent the "flicker" by re-setting world pos after parenting
-        this._draggedIcon.setWorldPosition(currentWP);
+        this._draggedIcon.setWorldPosition(wp);
     }
 
     private onTouchMove(event: EventTouch) {
         if (!this._draggedIcon || this._isSwapping) return;
-        
-        const touchPos = event.getUILocation();
-        this._draggedIcon.setWorldPosition(new Vec3(touchPos.x, touchPos.y, 0));
+        this._draggedIcon.setWorldPosition(new Vec3(event.getUILocation().x, event.getUILocation().y, 0));
     }
 
     private onTouchEnd(event: EventTouch) {
         if (!this._draggedIcon || this._isSwapping) return;
-
         const touchPos = event.getUILocation();
         let targetIcon: Node = null;
 
-        // Detection logic: Check if released over another icon
         for (let node of this.allIcons) {
             if (node === this._draggedIcon) continue;
-
-            const ui = node.getComponent(UITransform);
-            if (ui && ui.isHit(touchPos)) {
-                targetIcon = node;
-                break;
+            if (node.getComponent(UITransform).isHit(touchPos)) { 
+                targetIcon = node; 
+                break; 
             }
         }
 
-        if (targetIcon) {
-            this.handleSwap(this._draggedIcon, targetIcon);
-        } else {
-            this.returnHome();
-        }
-
+        if (targetIcon) { this.handleSwap(this._draggedIcon, targetIcon); }
+        else { this.returnHome(); }
         this._draggedIcon = null;
     }
 
+    // THIS IS THE ORIGINAL SLOW SWAP YOU APPROVED
     private handleSwap(dragged: Node, target: Node) {
         this._isSwapping = true;
-
-        // 1. Pre-swap state capture
         const targetStartWP = new Vec3(target.worldPosition);
         const draggedReleaseWP = new Vec3(dragged.worldPosition);
-        
-        const targetParent = target.parent;
-        const targetIndex = target.getSiblingIndex();
+        const targetOldParent = target.parent;
+        const targetOldIndex = target.getSiblingIndex();
 
-        // 2. The Logic Swap (Exchange positions in the hierarchy)
-        // This ensures the "home" is updated permanently
         target.setParent(this._originalParent);
         target.setSiblingIndex(this._startSiblingIndex);
+        dragged.setParent(targetOldParent);
+        dragged.setSiblingIndex(targetOldIndex);
 
-        dragged.setParent(targetParent);
-        dragged.setSiblingIndex(targetIndex);
-
-        // 3. Stabilization: Lock them to their visuals before animating
         target.setWorldPosition(targetStartWP);
         dragged.setWorldPosition(draggedReleaseWP);
 
-        // 4. Smooth Premium Animations
-        // The Target card glides to the start point
+        // Slow smooth animation
         tween(target)
-            .to(0.6, { worldPosition: this._startWorldPos }, { easing: 'quintOut' })
+            .to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' })
             .start();
 
-        // The Dragged card glides into the target slot with a nice "back" effect
         tween(dragged)
-            .to(0.8, { worldPosition: targetStartWP }, { easing: 'backOut' })
+            .to(this.swapDuration + 0.1, { worldPosition: targetStartWP }, { easing: 'backOut' })
             .call(() => {
                 this._isSwapping = false;
-                this.checkMatchingProgress(); // Check for rows matching
+                this.checkMatching(); // Check completion
             })
             .start();
     }
 
     private returnHome() {
         this._isSwapping = true;
-        
-        const currentWP = new Vec3(this._draggedIcon.worldPosition);
-        
+        const curWP = new Vec3(this._draggedIcon.worldPosition);
         this._draggedIcon.setParent(this._originalParent);
         this._draggedIcon.setSiblingIndex(this._startSiblingIndex);
-        
-        // Prevent flicker
-        this._draggedIcon.setWorldPosition(currentWP);
+        this._draggedIcon.setWorldPosition(curWP);
 
         tween(this._draggedIcon)
-            .to(0.25, { worldPosition: this._startWorldPos }, { easing: 'sineOut' })
+            .to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' })
             .call(() => { this._isSwapping = false; })
             .start();
     }
 
-    private checkMatchingProgress() {
-        // Look at the children of each row and check if they have the same family ID
-        // This iterates through the hierarchy as it currently stands
-        const rows = this.dragLayer.parent.children.filter(n => n.name.toLowerCase().includes("row"));
+    // --- MATCHING AND RESIZING LOGIC ---
 
-        rows.forEach(row => {
-            if (row.children.length === 0) return;
+    private checkMatching() {
+        this.rowNodes.forEach(rowNode => {
+            // Find icons using identity script within the row
+            const identities = rowNode.getComponentsInChildren(IconIdentity).filter(i => i.node.parent !== this.dragLayer);
             
-            const firstChildID = row.children[0].getComponent(IconIdentity)?.familyID;
-            if (!firstChildID) return;
+            if (identities.length === 4) {
+                const family = identities[0].familyID;
+                const isMatch = identities.every(id => id.familyID === family);
 
-            let matchCount = 0;
-            row.children.forEach(icon => {
-                if (icon.getComponent(IconIdentity)?.familyID === firstChildID) {
-                    matchCount++;
+                if (isMatch && family !== "") {
+                    this.flyAndScaleRow(rowNode, family);
                 }
-            });
-
-            if (matchCount === row.children.length) {
-                console.log(`Success: Row ${row.name} is fully sorted!`);
-                // You can add a visual success effect here (like glowing)
             }
         });
+    }
+
+    private flyAndScaleRow(row: Node, familyID: string) {
+        // Find label by identity
+        const targetLabel = this.labelNodes.find(lbl => lbl.getComponent(IconIdentity)?.familyID === familyID);
+
+        if (targetLabel && row.active) {
+            targetLabel.active = true;
+
+            // Remove icons from interactions
+            const childIdentities = row.getComponentsInChildren(IconIdentity);
+            childIdentities.forEach(idScript => {
+                idScript.node.off(Node.EventType.TOUCH_START);
+                const idx = this.allIcons.indexOf(idScript.node);
+                if(idx > -1) this.allIcons.splice(idx, 1);
+            });
+
+            // FLY AND RESIZE ANIMATION
+            const destWP = targetLabel.worldPosition;
+            // Target specific offset to fit inside label background
+            const finalPos = new Vec3(destWP.x, destWP.y - 25 , 0); 
+
+            tween(row)
+                .delay(0.2)
+                .to(0.8, { 
+                    worldPosition: finalPos, 
+                    scale: new Vec3(this.fittedScale, this.fittedScale, 1) 
+                }, { easing: 'quintInOut' })
+                .call(() => {
+                    // Small pop to finish
+                    tween(row).to(0.1, { scale: new Vec3(this.fittedScale + 0.05, this.fittedScale + 0.05, 1) })
+                             .to(0.1, { scale: new Vec3(this.fittedScale, this.fittedScale, 1) }).start();
+                })
+                .start();
+        }
     }
 }
