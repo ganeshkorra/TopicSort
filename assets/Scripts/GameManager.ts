@@ -12,12 +12,8 @@ export class GameManager extends Component {
     @property([Node]) public labelNodes: Node[] = []; 
 
     @property({ tooltip: "Time for swap" }) public swapDuration: number = 0.6;
-    
-    @property({ tooltip: "Size of the row when it reaches the label" }) 
-    public fittedScale: number = 0.6; 
-
-    @property({ tooltip: "Adjust this to move icons down inside the label" })
-    public labelYOffset: number = -20; 
+    @property({ tooltip: "Size of row in label" }) public fittedScale: number = 0.6; 
+    @property({ tooltip: "Y offset inside label" }) public labelYOffset: number = -25; 
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
@@ -26,11 +22,18 @@ export class GameManager extends Component {
     private _isSwapping: boolean = false;
     private _completedCount: number = 0;
 
-    // A list to track which rows are currently animating or finished
-    private _processingRows: Set<string> = new Set();
+    // Track grid positions manually since we aren't using a layout
+    private _gridYPositions: number[] = [];
+    private _activeRowNodes: Node[] = [];
 
     start() {
         this.labelNodes.forEach(label => label.active = false);
+
+        // Store original Y positions of all rows at the start
+        this.rowNodes.forEach(row => {
+            this._gridYPositions.push(row.position.y);
+            this._activeRowNodes.push(row);
+        });
 
         this.allIcons.forEach(icon => {
             icon.on(Node.EventType.TOUCH_START, this.onTouchStart, this);
@@ -75,6 +78,7 @@ export class GameManager extends Component {
         this._draggedIcon = null;
     }
 
+    // ORIGINAL SLOW SWAP - UNTOUCHED
     private handleSwap(dragged: Node, target: Node) {
         this._isSwapping = true;
         const targetStartWP = new Vec3(target.worldPosition);
@@ -107,67 +111,76 @@ export class GameManager extends Component {
         this._draggedIcon.setParent(this._originalParent);
         this._draggedIcon.setSiblingIndex(this._startSiblingIndex);
         this._draggedIcon.setWorldPosition(curWP);
-
         tween(this._draggedIcon).to(this.swapDuration, { worldPosition: this._startWorldPos }, { easing: 'expoOut' }).call(() => { this._isSwapping = false; }).start();
     }
 
-    // --- FIX: SEQUENTIAL DELAY MATCHING ---
+    // --- GRID SHIFTING LOGIC ---
 
     private checkMatching() {
-        this.rowNodes.forEach(rowNode => {
-            // Check if we are already processing this specific row (stops overlaps)
-            if (this._processingRows.has(rowNode.uuid)) return;
-
-            const identities = rowNode.getComponentsInChildren(IconIdentity).filter(i => i.node.parent !== this.dragLayer);
+        for (let i = 0; i < this._activeRowNodes.length; i++) {
+            let rowNode = this._activeRowNodes[i];
+            const identities = rowNode.getComponentsInChildren(IconIdentity).filter(ident => ident.node.parent !== this.dragLayer);
             
             if (identities.length === 4) {
                 const family = identities[0].familyID;
-                const isMatch = identities.every(id => id.familyID === family);
-
-                if (isMatch && family !== "") {
-                    // Mark as processing immediately
-                    this._processingRows.add(rowNode.uuid);
-                    this.flyToSequence(rowNode, family);
+                if (family !== "" && identities.every(id => id.familyID === family)) {
+                    this.processGridMatch(rowNode, family);
+                    return; // Process one match at a time for safety
                 }
             }
-        });
+        }
     }
 
-    private flyToSequence(row: Node, familyID: string) {
+    private processGridMatch(finishedRow: Node, familyID: string) {
         const targetLabel = this.labelNodes.find(lbl => lbl.getComponent(IconIdentity)?.familyID === familyID);
 
         if (targetLabel) {
-            // 1. Arrange Label in Stack
+            // 1. Remove this row from our "Smart Grid" tracking
+            const rowIdx = this._activeRowNodes.indexOf(finishedRow);
+            if (rowIdx > -1) this._activeRowNodes.splice(rowIdx, 1);
+
+            // 2. Fly Row to Top Labels
             targetLabel.active = true;
             targetLabel.setSiblingIndex(this._completedCount); 
             this._completedCount++; 
 
-            // 2. Clear interactions
-            row.getComponentsInChildren(IconIdentity).forEach(idScript => {
+            // Force label layout update
+            const lblLayout = targetLabel.parent.getComponent(Layout);
+            if (lblLayout) lblLayout.updateLayout();
+
+            // Clear interactions for icons in this row
+            finishedRow.getComponentsInChildren(IconIdentity).forEach(idScript => {
                 idScript.node.off(Node.EventType.TOUCH_START);
-                const idx = this.allIcons.indexOf(idScript.node);
-                if(idx > -1) this.allIcons.splice(idx, 1);
+                const iconIdx = this.allIcons.indexOf(idScript.node);
+                if(iconIdx > -1) this.allIcons.splice(iconIdx, 1);
             });
 
-            // 3. FORCE LAYOUT REFRESH 
-            const layoutComp = targetLabel.parent.getComponent(Layout);
-            if (layoutComp) {
-                layoutComp.updateLayout();
-            }
+            // FLY UP
+            const destWP = new Vec3(targetLabel.worldPosition);
+            destWP.y += this.labelYOffset;
 
-            // 4. WAIT A FRAME (This is the critical fix)
-            // This lets Cocos move the labels in the layout before calculating WorldPos
-            this.scheduleOnce(() => {
-                const destinationWP = new Vec3(targetLabel.worldPosition);
-                destinationWP.y += this.labelYOffset;
+            tween(finishedRow)
+                .delay(0.2)
+                .to(0.8, { worldPosition: destWP, scale: new Vec3(this.fittedScale, this.fittedScale, 1) }, { easing: 'quintInOut' })
+                .start();
 
-                tween(row)
-                    .to(0.8, { 
-                        worldPosition: destinationWP, 
-                        scale: new Vec3(this.fittedScale, this.fittedScale, 1)
-                    }, { easing: 'quintInOut' })
+            // 3. SMART SHIFT: Move the remaining rows up to fill the gap
+            this.shiftRowsToFillGaps();
+        }
+    }
+
+    private shiftRowsToFillGaps() {
+        // We move every active row to the next available "Highest" position in our Y-coordinate list
+        for (let i = 0; i < this._activeRowNodes.length; i++) {
+            const targetY = this._gridYPositions[i]; // Slot 1, then Slot 2, then Slot 3...
+            const rowToMove = this._activeRowNodes[i];
+
+            // Only move if the row isn't already there
+            if (Math.abs(rowToMove.position.y - targetY) > 5) {
+                tween(rowToMove)
+                    .to(0.5, { position: new Vec3(rowToMove.position.x, targetY, 0) }, { easing: 'backOut' })
                     .start();
-            }, 0); // 0 delay = wait until next logic update
+            }
         }
     }
 }
