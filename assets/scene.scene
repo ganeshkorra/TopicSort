@@ -6629,9 +6629,7 @@
     ],
     "swapDuration": 0.6,
     "fittedScale": 0.7,
-    "labelYOffset": -25,
-    "rowSpacing": 180,
-    "initialRowY": 300,
+    "labelYOffset": -30,
     "_id": "fcfA8sFZNDtZWtVav4HNcX"
   },
   {
