@@ -72,6 +72,10 @@ export class GameManager extends Component {
     private _matchQueue: MatchData[] = [];
     private _isRowFlying: boolean = false;
 
+    // ANALYTICS TRACKING
+    private _challengeStarted: boolean = false;  // Prevents multiple CHALLENGE_STARTED events
+    private _progressMilestonesSent: Set<number> = new Set();  // Tracks 25%, 50%, 75% sent
+
     start() {
         this.labelNodes.forEach(label => label.active = false);
         this.hideDropGlow();
@@ -102,6 +106,11 @@ export class GameManager extends Component {
 
         // Start hand tutorial if available
         this.playHandTutorial();
+
+        // Fire DISPLAYED event - game is ready for interaction
+        if (Analytics.instance) {
+            Analytics.instance.dispatchEvent(analyticsEvents.DISPLAYED);
+        }
     }
 
     private onTouchStart(event: EventTouch) {
@@ -212,6 +221,12 @@ export class GameManager extends Component {
         if (!this._timerStarted) {
             this._timerStarted = true;
             this.playBgm();
+
+            // Fire CHALLENGE_STARTED event on first meaningful interaction
+            if (Analytics.instance && !this._challengeStarted) {
+                this._challengeStarted = true;
+                Analytics.instance.dispatchEvent(analyticsEvents.CHALLENGE_STARTED);
+            }
         }
         this.playSound(this.swapSound);
         
@@ -335,6 +350,9 @@ export class GameManager extends Component {
         this._moveCount++;
         this.updateProgressUI();
         
+        // Check and fire progress milestone events (25%, 50%, 75%)
+        this.checkProgressMilestones();
+        
         // Reset idle hint timer on successful move
         this._timeSinceLastMove = 0;
         this._idleHintTriggered = false;
@@ -344,6 +362,35 @@ export class GameManager extends Component {
             this.scheduleOnce(() => {
                 this.endGameLose();
             }, 0.5);
+        }
+    }
+
+    private checkProgressMilestones() {
+        const totalMatches = Math.max(this.rowNodes.length, 1);
+        const progressPercent = Math.floor((this._completedCount / totalMatches) * 100);
+
+        // Fire CHALLENGE_PASS_25 at 25% completion
+        if (progressPercent >= 25 && !this._progressMilestonesSent.has(25)) {
+            this._progressMilestonesSent.add(25);
+            if (Analytics.instance) {
+                Analytics.instance.dispatchEvent(analyticsEvents.CHALLENGE_PASS_25);
+            }
+        }
+
+        // Fire CHALLENGE_PASS_50 at 50% completion
+        if (progressPercent >= 50 && !this._progressMilestonesSent.has(50)) {
+            this._progressMilestonesSent.add(50);
+            if (Analytics.instance) {
+                Analytics.instance.dispatchEvent(analyticsEvents.CHALLENGE_PASS_50);
+            }
+        }
+
+        // Fire CHALLENGE_PASS_75 at 75% completion
+        if (progressPercent >= 75 && !this._progressMilestonesSent.has(75)) {
+            this._progressMilestonesSent.add(75);
+            if (Analytics.instance) {
+                Analytics.instance.dispatchEvent(analyticsEvents.CHALLENGE_PASS_75);
+            }
         }
     }
 
@@ -448,6 +495,11 @@ export class GameManager extends Component {
         this.scheduleOnce(() => {
             if (this.winCTA) {
                 this.winCTA.active = true;
+
+                // Fire ENDCARD_SHOWN event when endcard displays
+                if (Analytics.instance) {
+                    Analytics.instance.dispatchEvent(analyticsEvents.ENDCARD_SHOWN);
+                }
             }
         }, this.winCtaDelay);
 
@@ -531,6 +583,11 @@ export class GameManager extends Component {
         // Show lose CTA screen
         if (this.loseCTA) {
             this.loseCTA.active = true;
+
+            // Fire ENDCARD_SHOWN event when endcard displays
+            if (Analytics.instance) {
+                Analytics.instance.dispatchEvent(analyticsEvents.ENDCARD_SHOWN);
+            }
         }
 
         // Fire analytics

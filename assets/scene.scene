@@ -644,7 +644,7 @@
     },
     "_lscale": {
       "__type__": "cc.Vec3",
-      "x": 0.383,
+      "x": 0.316,
       "y": 0.383,
       "z": 0.383
     },
@@ -773,7 +773,7 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 686,
+      "width": 0,
       "height": 84.6
     },
     "_anchorPoint": {
@@ -894,7 +894,7 @@
       "__id__": 18
     },
     "_mode": 0,
-    "_totalLength": 545.7,
+    "_totalLength": 686,
     "_progress": 0,
     "_reverse": false,
     "_id": "fcA7CnglxBXIlCQlPLziP0"
