@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Vec2, Vec3, EventTouch, UITransform, tween, Layout, ParticleSystem2D, ParticleSystem, Label, ProgressBar } from 'cc';
+import { _decorator, Color, Component, EventTouch, Graphics, Label, Layout, Node, ProgressBar, tween, UITransform, UIOpacity, Vec2, Vec3 } from 'cc';
 import { IconIdentity } from './IconIdentity';
 import { Analytics, analyticsEvents } from './Analytics';
 import { HandTutorialNode } from './HandTutorialNode';
@@ -36,6 +36,7 @@ export class GameManager extends Component {
     @property({ tooltip: "Moves shown at game start" }) public totalMoves: number = 40;
     @property({ tooltip: "Game time limit in seconds" }) public gameTimeLimit: number = 45;
     @property({ tooltip: "Time before idle hand hint appears (seconds)" }) public idleHintDelay: number = 7;
+    @property({ tooltip: "Seconds to wait after confetti before showing win CTA" }) public winCtaDelay: number = 1.2;
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
@@ -398,10 +399,12 @@ export class GameManager extends Component {
             icon.off(Node.EventType.TOUCH_END);
         });
 
-        // Show win CTA screen
-        if (this.winCTA) {
-            this.winCTA.active = true;
-        }
+        this.playConfettiBlast();
+        this.scheduleOnce(() => {
+            if (this.winCTA) {
+                this.winCTA.active = true;
+            }
+        }, this.winCtaDelay);
 
         // Fire analytics
         if (Analytics.instance) {
@@ -409,6 +412,61 @@ export class GameManager extends Component {
         }
 
         console.log("🎉 GAME WON! All rows matched!");
+    }
+
+    private playConfettiBlast(): void {
+        const parent = this.dragLayer || this.node;
+        if (!parent) return;
+
+        const colors = [
+            new Color(255, 82, 82, 255),
+            new Color(255, 214, 72, 255),
+            new Color(77, 208, 225, 255),
+            new Color(129, 199, 132, 255),
+            new Color(186, 104, 200, 255),
+        ];
+
+        for (let i = 0; i < 104; i++) {
+            const piece = new Node('RuntimeConfetti');
+            parent.addChild(piece);
+            piece.setWorldPosition(this.winCTA?.worldPosition || this.node.worldPosition);
+            const startPosition = new Vec3(piece.position);
+
+            const transform = piece.addComponent(UITransform);
+            transform.setContentSize(80, 108);
+
+            const opacity = piece.addComponent(UIOpacity);
+            opacity.opacity = 255;
+
+            const graphic = piece.addComponent(Graphics);
+            graphic.fillColor = colors[i % colors.length];
+            graphic.rect(-25, -39, 50, 78);
+            graphic.fill();
+
+            const angle = Math.random() * Math.PI * 2;
+            const distance = 380 + Math.random() * 260;
+            const targetPosition = new Vec3(
+                startPosition.x + Math.cos(angle) * distance,
+                startPosition.y + Math.sin(angle) * distance - 80,
+                0
+            );
+
+            piece.angle = Math.random() * 360;
+
+            tween(piece)
+                .to(0.85 + Math.random() * 0.35, {
+                    position: targetPosition,
+                    angle: piece.angle + 240 + Math.random() * 360,
+                    scale: new Vec3(0.35, 0.35, 1),
+                }, { easing: 'quadOut' })
+                .call(() => piece.destroy())
+                .start();
+
+            tween(opacity)
+                .delay(0.45)
+                .to(0.45, { opacity: 0 })
+                .start();
+        }
     }
 
     private endGameLose() {
@@ -452,11 +510,10 @@ export class GameManager extends Component {
         const handTutorial = this.handTutorialNode.getComponent(HandTutorialNode);
         if (!handTutorial) return;
 
-        // Smart hint: Find the row closest to matching and show icons from same family in same row
+        // Smart hint: show a real cross-row swap that helps complete the closest row.
         let bestIcon1: Node | null = null;
         let bestIcon2: Node | null = null;
         let bestScore: number = -1;
-        let bestRow: Node | null = null;
 
         // Analyze each active row to find which one is closest to matching
         this._activeRows.forEach(rowNode => {
@@ -464,13 +521,10 @@ export class GameManager extends Component {
             
             // Count families in this row
             const familyCount: { [key: string]: number } = {};
-            const familyIcons: { [key: string]: Node[] } = {};
 
             identities.forEach(idScript => {
                 const family = idScript.familyID;
                 familyCount[family] = (familyCount[family] || 0) + 1;
-                if (!familyIcons[family]) familyIcons[family] = [];
-                familyIcons[family].push(idScript.node);
             });
 
             // Find family with most icons in this row (closest to match)
@@ -481,26 +535,55 @@ export class GameManager extends Component {
                 // Then rows with 2 of same family (two swaps away)
                 let score = count === 3 ? 100 : count === 2 ? 50 : 0;
                 
-                // Only pick if score is better AND we have at least 2 icons of the same family in the SAME row
-                if (score > bestScore && familyIcons[family].length >= 2) {
+                const sourceIcon = this.findIconInOtherRow(family, rowNode);
+                const targetIcon = identities.find(idScript => idScript.familyID !== family)?.node || null;
+
+                // Only show hints that drag from one row into another row.
+                if (score > bestScore && sourceIcon && targetIcon) {
                     bestScore = score;
-                    bestRow = rowNode;
-                    bestIcon1 = familyIcons[family][0];
-                    bestIcon2 = familyIcons[family][1];
+                    bestIcon1 = sourceIcon;
+                    bestIcon2 = targetIcon;
                 }
             });
         });
 
-        // Fallback: if no smart match found, use first two remaining icons
+        // Fallback: if no smart match found, still demonstrate a cross-row drag.
         if (!bestIcon1 || !bestIcon2) {
-            bestIcon1 = this.allIcons[0];
-            bestIcon2 = this.allIcons[1];
+            const fallback = this.findAnyCrossRowPair();
+            bestIcon1 = fallback.start;
+            bestIcon2 = fallback.end;
         }
 
         if (bestIcon1 && bestIcon2) {
-            const hintType = bestScore === 100 ? "3 icons matching" : bestScore === 50 ? "2 icons matching" : "remaining";
-            console.log(`💡 Idle Hint: Showing same family icons from same row (${hintType})`);
+            const hintType = bestScore === 100 ? "3 icons matching" : bestScore === 50 ? "2 icons matching" : "cross-row";
+            console.log(`💡 Idle Hint: Showing cross-row drag (${hintType})`);
             handTutorial.playDragTutorial(bestIcon1, bestIcon2);
         }
+    }
+
+    private findIconInOtherRow(family: string, excludedRow: Node): Node | null {
+        for (const rowNode of this._activeRows) {
+            if (rowNode === excludedRow) continue;
+
+            const icon = rowNode
+                .getComponentsInChildren(IconIdentity)
+                .find(idScript => idScript.node.parent !== this.dragLayer && idScript.familyID === family)?.node || null;
+
+            if (icon) return icon;
+        }
+
+        return null;
+    }
+
+    private findAnyCrossRowPair(): { start: Node | null, end: Node | null } {
+        for (const start of this.allIcons) {
+            for (const end of this.allIcons) {
+                if (start !== end && start.parent !== end.parent) {
+                    return { start, end };
+                }
+            }
+        }
+
+        return { start: null, end: null };
     }
 }
