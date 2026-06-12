@@ -1,4 +1,4 @@
-import { _decorator, Color, Component, EventTouch, Graphics, Label, Layout, Node, ProgressBar, tween, UITransform, UIOpacity, Vec2, Vec3 } from 'cc';
+import { _decorator, AudioClip, AudioSource, Color, Component, EventTouch, Graphics, Label, Layout, Node, ProgressBar, tween, UITransform, UIOpacity, Vec2, Vec3 } from 'cc';
 import { IconIdentity } from './IconIdentity';
 import { Analytics, analyticsEvents } from './Analytics';
 import { HandTutorialNode } from './HandTutorialNode';
@@ -25,6 +25,17 @@ export class GameManager extends Component {
     @property(ProgressBar) public progressBar: ProgressBar = null;
     @property(Node) public progressFillNode: Node = null;
     @property([Node]) public allIcons: Node[] = [];
+    @property(AudioSource) public sfxAudioSource: AudioSource = null;
+    @property(AudioSource) public bgmAudioSource: AudioSource = null;
+    @property(AudioClip) public touchSound: AudioClip = null;
+    @property(AudioClip) public dropGlowSound: AudioClip = null;
+    @property(AudioClip) public dropSound: AudioClip = null;
+    @property(AudioClip) public swapSound: AudioClip = null;
+    @property(AudioClip) public rowSortSound: AudioClip = null;
+    @property(AudioClip) public confettiBlastSound: AudioClip = null;
+    @property(AudioClip) public bgmClip: AudioClip = null;
+    @property({ tooltip: "Volume for one-shot gameplay sounds" }) public sfxVolume: number = 1;
+    @property({ tooltip: "Volume for background music" }) public bgmVolume: number = 0.35;
     
     @property([Node]) public rowNodes: Node[] = [];   
     @property([Node]) public labelNodes: Node[] = []; 
@@ -52,6 +63,7 @@ export class GameManager extends Component {
     private _tutorialActive: boolean = true;  // Hand tutorial is active
     private _timeSinceLastMove: number = 0;  // Time elapsed since last successful move
     private _idleHintTriggered: boolean = false;  // Idle hint has been shown
+    private _currentDropGlowTarget: Node = null;
 
     private _gridYSlots: number[] = [];
     private _activeRows: Node[] = [];
@@ -85,21 +97,18 @@ export class GameManager extends Component {
             icon.on(Node.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
         });
 
+        if (!this.sfxAudioSource) this.sfxAudioSource = this.node.getComponent(AudioSource) || this.node.addComponent(AudioSource);
+        if (!this.bgmAudioSource) this.bgmAudioSource = this.node.addComponent(AudioSource);
+
         // Start hand tutorial if available
         this.playHandTutorial();
     }
 
     private onTouchStart(event: EventTouch) {
-        // Stop tutorial on first player input
-        if (this._tutorialActive) {
-            this._tutorialActive = false;
-            const handTutorial = this.handTutorialNode?.getComponent(HandTutorialNode);
-            if (handTutorial) {
-                handTutorial.stopTutorial();
-            }
-        }
+        this.stopHandHint();
 
         if (this._isSwapping || this._isRowFlying) return;
+        this.playSound(this.touchSound);
         this._draggedIcon = event.target as Node;
         this.hideDropGlow();
         this._originalParent = this._draggedIcon.parent;
@@ -130,7 +139,10 @@ export class GameManager extends Component {
         const targetIcon = this.findDropTarget(touchPos);
 
         this.hideDropGlow();
-        if (targetIcon) { this.handleSwap(this._draggedIcon, targetIcon); }
+        if (targetIcon) {
+            this.playSound(this.dropSound);
+            this.handleSwap(this._draggedIcon, targetIcon);
+        }
         else { this.returnHome(); }
         this._draggedIcon = null;
     }
@@ -151,6 +163,11 @@ export class GameManager extends Component {
     private showDropGlow(target: Node) {
         if (!target || !this.dropGlow) return;
 
+        if (this._currentDropGlowTarget !== target) {
+            this._currentDropGlowTarget = target;
+            this.playSound(this.dropGlowSound);
+        }
+
         this.dropGlow.active = true;
         this.dropGlow.setWorldPosition(target.worldPosition);
 
@@ -162,6 +179,30 @@ export class GameManager extends Component {
 
     private hideDropGlow() {
         if (this.dropGlow) this.dropGlow.active = false;
+        this._currentDropGlowTarget = null;
+    }
+
+    private playSound(clip: AudioClip | null): void {
+        if (!clip) return;
+        if (!this.sfxAudioSource) this.sfxAudioSource = this.node.getComponent(AudioSource) || this.node.addComponent(AudioSource);
+
+        this.sfxAudioSource.playOneShot(clip, this.sfxVolume);
+    }
+
+    private playBgm(): void {
+        if (!this.bgmClip) return;
+        if (!this.bgmAudioSource) this.bgmAudioSource = this.node.addComponent(AudioSource);
+
+        this.bgmAudioSource.clip = this.bgmClip;
+        this.bgmAudioSource.loop = true;
+        this.bgmAudioSource.volume = this.bgmVolume;
+        this.bgmAudioSource.play();
+    }
+
+    private stopBgm(): void {
+        if (this.bgmAudioSource) {
+            this.bgmAudioSource.stop();
+        }
     }
 
     private handleSwap(dragged: Node, target: Node) {
@@ -170,7 +211,9 @@ export class GameManager extends Component {
         // Start timer on first swap
         if (!this._timerStarted) {
             this._timerStarted = true;
+            this.playBgm();
         }
+        this.playSound(this.swapSound);
         
         // Count this move
         this.addMove();
@@ -276,6 +319,7 @@ export class GameManager extends Component {
                 tween(finishedRow)
                     .to(0.8, { worldPosition: flyTargetWP, scale: new Vec3(this.fittedScale, this.fittedScale, 1) }, { easing: 'quintInOut' })
                     .call(() => {
+                        this.playSound(this.rowSortSound);
                         // THIS ANIMATION IS DONE, MOVE TO NEXT
                         this.processMatchQueue();
                     })
@@ -391,6 +435,7 @@ export class GameManager extends Component {
     private endGameWin() {
         if (this._isGameEnded) return;
         this._isGameEnded = true;
+        this.stopBgm();
 
         // Disable all touch on icons
         this.allIcons.forEach(icon => {
@@ -415,6 +460,8 @@ export class GameManager extends Component {
     }
 
     private playConfettiBlast(): void {
+        this.playSound(this.confettiBlastSound);
+
         const parent = this.dragLayer || this.node;
         if (!parent) return;
 
@@ -472,6 +519,7 @@ export class GameManager extends Component {
     private endGameLose() {
         if (this._isGameEnded) return;
         this._isGameEnded = true;
+        this.stopBgm();
 
         // Disable all touch on icons
         this.allIcons.forEach(icon => {
@@ -502,6 +550,17 @@ export class GameManager extends Component {
 
         // Show drag tutorial between the two target icons
         handTutorial.playDragTutorial(this.targetIconNode1, this.targetIconNode2);
+    }
+
+    private stopHandHint(): void {
+        this._tutorialActive = false;
+        this._timeSinceLastMove = 0;
+        this._idleHintTriggered = false;
+
+        const handTutorial = this.handTutorialNode?.getComponent(HandTutorialNode);
+        if (handTutorial) {
+            handTutorial.stopTutorial();
+        }
     }
 
     private playIdleHandHint(): void {
