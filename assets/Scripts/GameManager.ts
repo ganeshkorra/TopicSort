@@ -1,4 +1,4 @@
-import { _decorator, AudioClip, AudioSource, Color, Component, EventTouch, Graphics, Label, Layout, Node, ProgressBar, tween, UITransform, UIOpacity, Vec2, Vec3 } from 'cc';
+import { _decorator, AudioClip, AudioSource, Color, Component, EventTouch, Graphics, Label, Layout, Node, ProgressBar, tween, Tween, UITransform, UIOpacity, Vec2, Vec3 } from 'cc';
 import { IconIdentity } from './IconIdentity';
 import { Analytics, analyticsEvents } from './Analytics';
 import { HandTutorialNode } from './HandTutorialNode';
@@ -19,9 +19,11 @@ export class GameManager extends Component {
     @property(Node) public handTutorialNode: Node = null;  // Hand tutorial node
     @property(Node) public targetIconNode1: Node = null;  // First icon for hand tutorial
     @property(Node) public targetIconNode2: Node = null;  // Second icon for hand tutorial
+    @property(Node) public guideLabel: Node = null;  // Guide label that shows with hand tutorial
    
     @property(Label) public movesCountLabel: Label = null;
     @property(Label) public matchesCountLabel: Label = null;
+    @property(Label) public outcomeLabel: Label = null;  // Label that shows game outcome (Well Played / Keep Trying)
     @property(ProgressBar) public progressBar: ProgressBar = null;
     @property(Node) public progressFillNode: Node = null;
     @property([Node]) public allIcons: Node[] = [];
@@ -48,6 +50,9 @@ export class GameManager extends Component {
     @property({ tooltip: "Game time limit in seconds" }) public gameTimeLimit: number = 45;
     @property({ tooltip: "Time before idle hand hint appears (seconds)" }) public idleHintDelay: number = 7;
     @property({ tooltip: "Seconds to wait after confetti before showing win CTA" }) public winCtaDelay: number = 1.2;
+    @property({ tooltip: "Fade duration for icons when the game loads" }) public iconIntroFadeDuration: number = 0.35;
+    @property({ tooltip: "Delay between each row during the icon load animation" }) public iconIntroRowDelay: number = 0.18;
+    @property({ tooltip: "Small delay between icons in the same row" }) public iconIntroIconStagger: number = 0.04;
 
     private _draggedIcon: Node = null;
     private _originalParent: Node = null;
@@ -104,13 +109,32 @@ export class GameManager extends Component {
         if (!this.sfxAudioSource) this.sfxAudioSource = this.node.getComponent(AudioSource) || this.node.addComponent(AudioSource);
         if (!this.bgmAudioSource) this.bgmAudioSource = this.node.addComponent(AudioSource);
 
-        // Start hand tutorial if available
-        this.playHandTutorial();
+        const introDuration = this.playIconIntroAnimation();
+        this.scheduleOnce(() => {
+            this.playHandTutorial();
+        }, introDuration);
+
+        // Initialize outcome label - fade in at start
+        this.initializeOutcomeLabel();
 
         // Fire DISPLAYED event - game is ready for interaction
         if (Analytics.instance) {
             Analytics.instance.dispatchEvent(analyticsEvents.DISPLAYED);
         }
+    }
+
+    private initializeOutcomeLabel(): void {
+        if (!this.outcomeLabel) return;
+
+        // Get or add UIOpacity component
+        const opacity = this.outcomeLabel.getComponent(UIOpacity) || this.outcomeLabel.addComponent(UIOpacity);
+        opacity.opacity = 0;
+
+        // Fade in the outcome label
+        tween(opacity)
+            .delay(0.5)
+            .to(0.6, { opacity: 255 }, { easing: 'quadOut' })
+            .start();
     }
 
     private onTouchStart(event: EventTouch) {
@@ -212,6 +236,33 @@ export class GameManager extends Component {
         if (this.bgmAudioSource) {
             this.bgmAudioSource.stop();
         }
+    }
+
+    private playIconIntroAnimation(): number {
+        let longestDelay = 0;
+
+        this.rowNodes.forEach((rowNode, rowIndex) => {
+            const rowIcons = rowNode
+                .getComponentsInChildren(IconIdentity)
+                .map(identity => identity.node)
+                .filter(icon => this.allIcons.indexOf(icon) !== -1);
+
+            rowIcons.forEach((icon, iconIndex) => {
+                const opacity = icon.getComponent(UIOpacity) || icon.addComponent(UIOpacity);
+                const originalOpacity = opacity.opacity;
+                const delay = rowIndex * this.iconIntroRowDelay + iconIndex * this.iconIntroIconStagger;
+
+                longestDelay = Math.max(longestDelay, delay);
+                opacity.opacity = 0;
+
+                tween(opacity)
+                    .delay(delay)
+                    .to(this.iconIntroFadeDuration, { opacity: originalOpacity }, { easing: 'quadOut' })
+                    .start();
+            });
+        });
+
+        return longestDelay + this.iconIntroFadeDuration;
     }
 
     private handleSwap(dragged: Node, target: Node) {
@@ -484,6 +535,11 @@ export class GameManager extends Component {
         this._isGameEnded = true;
         this.stopBgm();
 
+        // Update outcome label to "Well Played"
+        if (this.outcomeLabel) {
+            this.outcomeLabel.string = "Well Played";
+        }
+
         // Disable all touch on icons
         this.allIcons.forEach(icon => {
             icon.off(Node.EventType.TOUCH_START);
@@ -573,6 +629,11 @@ export class GameManager extends Component {
         this._isGameEnded = true;
         this.stopBgm();
 
+        // Update outcome label to "Keep Trying"
+        if (this.outcomeLabel) {
+            this.outcomeLabel.string = "Keep Trying";
+        }
+
         // Disable all touch on icons
         this.allIcons.forEach(icon => {
             icon.off(Node.EventType.TOUCH_START);
@@ -605,6 +666,9 @@ export class GameManager extends Component {
         const handTutorial = this.handTutorialNode.getComponent(HandTutorialNode);
         if (!handTutorial) return;
 
+        // Show guide label with pop animation
+        this.showGuideLabel();
+
         // Show drag tutorial between the two target icons
         handTutorial.playDragTutorial(this.targetIconNode1, this.targetIconNode2);
     }
@@ -613,6 +677,9 @@ export class GameManager extends Component {
         this._tutorialActive = false;
         this._timeSinceLastMove = 0;
         this._idleHintTriggered = false;
+
+        // Hide guide label with fade animation
+        this.hideGuideLabel();
 
         const handTutorial = this.handTutorialNode?.getComponent(HandTutorialNode);
         if (handTutorial) {
@@ -673,8 +740,64 @@ export class GameManager extends Component {
         if (bestIcon1 && bestIcon2) {
             const hintType = bestScore === 100 ? "3 icons matching" : bestScore === 50 ? "2 icons matching" : "cross-row";
             console.log(`💡 Idle Hint: Showing cross-row drag (${hintType})`);
+            
+            // Show guide label with pop animation
+            this.showGuideLabel();
+            
             handTutorial.playDragTutorial(bestIcon1, bestIcon2);
         }
+    }
+
+    private showGuideLabel(): void {
+        if (!this.guideLabel) return;
+
+        // Stop any existing tweens on the guide label
+        Tween.stopAllByTarget(this.guideLabel);
+
+        // Set initial state: invisible and small scale
+        this.guideLabel.active = true;
+        this.guideLabel.setScale(new Vec3(0, 0, 1));
+
+        // Pop and scale in animation, then pulse continuously
+        tween(this.guideLabel)
+            .to(0.4, { scale: new Vec3(1.15, 1.15, 1) }, { easing: 'backOut' })
+            .to(0.1, { scale: new Vec3(1, 1, 1) }, { easing: 'quadOut' })
+            .call(() => {
+                // Start pulsing animation after pop-in
+                this.pulseGuideLabel();
+            })
+            .start();
+    }
+
+    private pulseGuideLabel(): void {
+        if (!this.guideLabel || !this.guideLabel.active) return;
+
+        // Pulse animation: scale up and down repeatedly
+        tween(this.guideLabel)
+            .to(0.5, { scale: new Vec3(1.1, 1.1, 1) }, { easing: 'quadInOut' })
+            .to(0.5, { scale: new Vec3(1, 1, 1) }, { easing: 'quadInOut' })
+            .call(() => {
+                // Loop the pulse if still active
+                if (this.guideLabel && this.guideLabel.active) {
+                    this.pulseGuideLabel();
+                }
+            })
+            .start();
+    }
+
+    private hideGuideLabel(): void {
+        if (!this.guideLabel) return;
+
+        // Stop any existing tweens on the guide label
+        Tween.stopAllByTarget(this.guideLabel);
+
+        // Scale out and hide animation
+        tween(this.guideLabel)
+            .to(0.3, { scale: new Vec3(0, 0, 1) }, { easing: 'backIn' })
+            .call(() => {
+                this.guideLabel.active = false;
+            })
+            .start();
     }
 
     private findIconInOtherRow(family: string, excludedRow: Node): Node | null {
